@@ -1,0 +1,206 @@
+<!doctype html>
+<html>
+<head>
+  <title>Raycast</title>
+</head>
+<body style='background-color: black'>
+  <canvas id="content"></canvas>
+  <script type="text/javascript">
+/*
+  Probably some terrible implementation of DDA.
+*/
+
+const CANVAS_HEIGHT = 900, CANVAS_WIDTH = 1600;
+var canvas = document.getElementById("content");
+var ctx = canvas.getContext("2d");
+
+const PI = 3.14159, FOV = PI / 3;
+var positionX = 4.1, positionY = 4.1, angle = 0.0;
+var movementSpeed = 0.05, sensitivity = 0.04;
+var maxRenderDist = 12;
+var moveForward = false, moveBackward = false, moveRight = false, moveLeft = false, turnRight = false, turnLeft = false;
+var stars = [], numStars = 150;
+var moonX = 0, moonY = CANVAS_HEIGHT / 7, moonR = CANVAS_HEIGHT / 10;
+
+// 0: Empty space. 1, 2 are different types of walls.
+var world = [
+  [1,2,1,2,1,2,1,2,1,2,1,2,1,2,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+  [2,0,0,0,0,0,0,0,0,0,0,0,2,0,0,1],
+  [1,1,2,1,2,1,2,1,0,0,2,1,1,0,0,2],
+  [2,0,0,0,0,0,0,2,0,0,0,0,2,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,1,1,2,1],
+  [2,0,0,0,0,0,0,2,0,0,0,0,2,0,0,1],
+  [1,0,0,2,1,2,1,1,1,2,0,0,1,0,0,2],
+  [2,0,0,0,0,0,0,2,0,0,0,0,2,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,1,0,0,2],
+  [2,0,0,0,0,0,0,2,0,2,0,0,0,0,0,1],
+  [1,0,0,2,1,2,1,2,1,1,0,0,0,0,0,2],
+  [2,0,0,1,0,0,0,0,1,0,0,2,1,2,1,1],
+  [1,0,0,2,0,0,1,0,2,0,0,1,0,0,0,2],
+  [2,0,0,0,0,0,2,0,0,0,0,0,0,0,0,1],
+  [1,1,2,1,2,1,1,1,2,1,2,1,2,1,2,1]
+];
+
+class Star {
+  constructor(x, y) { this.x = x; this.y = y; }
+}
+
+function setup() {
+  this.canvas.setAttribute("width", CANVAS_WIDTH);
+  this.canvas.setAttribute("height", CANVAS_HEIGHT);
+  this.ctx.lineWidth = 0
+
+  // Stars
+  for(let i = 0; i < numStars; i++) stars.push(new Star(Math.random() * 2 * PI, Math.floor(Math.random() * CANVAS_HEIGHT / 2)));
+
+  document.addEventListener('keydown', movementOn);
+  document.addEventListener('keyup', movementOff);
+
+  window.setInterval(function() { render(); calcMove() }, 12);
+}
+
+function render() {
+  for(let j = 0; j < CANVAS_HEIGHT / 2; j++) {
+    this.ctx.fillStyle = getColor(0, 0, 0);
+    this.ctx.fillRect(0, j, CANVAS_WIDTH, 1);
+  }
+  
+  for(let j = CANVAS_HEIGHT / 2; j < CANVAS_HEIGHT; j++) {
+    this.ctx.fillStyle = getColor(0, 0, 200 * (j - CANVAS_HEIGHT/2) / (CANVAS_HEIGHT));
+    this.ctx.fillRect(0, j, CANVAS_WIDTH, 1);
+  }
+
+  // Sky
+  this.ctx.fillStyle = getColor(255, 255, 255);
+  let relMoonX = moonX - this.angle;
+  if(relMoonX < 0) relMoonX += 2 * PI;
+  else if(relMoonX >= 2 * PI) relMoonX -= 2 * PI;
+  this.ctx.beginPath();
+  this.ctx.arc(relMoonX * CANVAS_WIDTH / FOV, moonY, moonR, 0, 2 * PI);
+  this.ctx.fill();
+  for(let i = 0; i < numStars; i++) {
+    let starX = stars[i].x - this.angle;
+    if(starX < 0) starX += 2 * PI;
+    else if(starX >= 2 * PI) starX -= 2 * PI;
+    this.ctx.fillRect(starX * CANVAS_WIDTH / FOV, stars[i].y, 2, 2);
+  }
+  
+  for(let i = 0; i < CANVAS_WIDTH; i++) {
+    let rayA = this.angle - (FOV/2) + i * FOV/CANVAS_WIDTH;
+
+    // DDA (who knows how this works??)
+    let distX = Math.cos(rayA), distY = Math.sin(rayA);
+    let scaleX = Math.sqrt(1 + (distY * distY) / (distX * distX));
+    let scaleY = Math.sqrt(1 + (distX * distX) / (distY * distY));
+    let unitX = Math.floor(this.positionX), unitY = Math.floor(this.positionY);
+    let signX = distX >= 0 ? 1 : -1, signY = distY >= 0 ? 1 : -1;
+    let rayLX = 0, rayLY = 0;
+
+    if(signX == -1) rayLX = (this.positionX - unitX) * scaleX;
+    else rayLX = (unitX + 1 - this.positionX) * scaleX;
+
+    if(signY == -1) rayLY = (this.positionY - unitY) * scaleY;
+    else rayLY = (unitY + 1 - this.positionY) * scaleY;
+
+    let wall = false;
+    let rayM = 0;
+    while(!wall && rayM < this.maxRenderDist) {
+      if(rayLX < rayLY) {
+        unitX += signX;
+        rayM = rayLX;
+        rayLX += scaleX;
+      }
+      else {
+        unitY += signY;
+        rayM = rayLY;
+        rayLY += scaleY;
+      }
+      wall = checkCollision(unitX, unitY);
+    }
+    let wallHeight = wall != 0 ? Math.floor(CANVAS_HEIGHT / rayM) : 0;
+
+    let r = 0, g = 0, b = 0;
+    switch(wall) {
+      case 1:
+        g = 155;
+        break;
+      case 2:
+        r = 155;
+        b = 155;
+        break;
+    }
+
+    this.ctx.fillStyle = getColor(r * (1.0 - rayM/maxRenderDist), g * (1.0 - rayM/maxRenderDist), b * (1.0 - rayM/maxRenderDist));
+    this.ctx.fillRect(i, CANVAS_HEIGHT/2 - wallHeight/2, 1, CANVAS_HEIGHT/2 + wallHeight/2 - (CANVAS_HEIGHT/2 - wallHeight/2));
+  }
+}
+
+function checkCollision(x, y) {
+  if(x < 0 || x >= this.world[0].length || y < 0 || y >= this.world.length) return false;
+  return this.world[Math.floor(x)][Math.floor(y)];
+}
+
+function movementOn(e) {
+  switch(e.code) {
+    case 'KeyW':
+      moveForward = true;
+      break;
+    case 'KeyS':
+      moveBackward = true;
+      break;
+    case 'KeyA':
+      turnLeft = true;
+      break;
+    case 'KeyD':
+      turnRight = true;
+      break;
+  }
+}
+
+function movementOff(e) {
+  switch(e.code) {
+    case 'KeyW':
+      moveForward = false;
+      break;
+    case 'KeyS':
+      moveBackward = false;
+      break;
+    case 'KeyA':
+      turnLeft = false;
+      break;
+    case 'KeyD':
+      turnRight = false;
+      break;
+  }
+}
+
+function calcMove() {
+  if(this.angle >= 2 * PI) this.angle -= 2 * PI;
+  else if(this.angle < 0) this.angle += 2 * PI;
+
+  if(moveForward) {
+    if(checkCollision(positionX + movementSpeed * Math.cos(angle), positionY + movementSpeed * Math.sin(angle)) == 0) {
+      positionX += movementSpeed * Math.cos(angle);
+      positionY += movementSpeed * Math.sin(angle);
+    }
+  }
+  if(moveBackward) {
+    if(checkCollision(positionX - movementSpeed * Math.cos(angle), positionY - movementSpeed * Math.sin(angle)) == 0) {
+      positionX -= movementSpeed * Math.cos(angle);
+      positionY -= movementSpeed * Math.sin(angle);
+    }
+  }
+
+  if(turnLeft) angle -= sensitivity;
+  if(turnRight) angle += sensitivity;
+}
+
+function getColor(r, g, b) {
+  return "rgba(" + Math.round(r) + "," + Math.round(g) + "," + Math.round(b) + ",255)";
+}
+
+setup();
+  </script>
+</body>
+</html>
